@@ -4,8 +4,13 @@ import time
 import random
 import re
 import os
+import sys
 from datetime import date, timedelta
 from dotenv import load_dotenv
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+print("Imports done.", flush=True)
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/pw-browsers"
 
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -28,6 +33,30 @@ START_DATE = yesterday
 END_DATE = yesterday
 
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
+
+DRIVE_FOLDER_ID = "1wKLZcbe8p9Qpgl9g9KZ4G6bGk__JowY5"
+
+
+def get_drive_service():
+    creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not creds_json:
+        print("GOOGLE_SERVICE_ACCOUNT_JSON not set. Skipping upload.")
+        return None
+    creds_info = json.loads(creds_json)
+    creds = Credentials.from_service_account_info(creds_info, scopes=["https://www.googleapis.com/auth/drive.file"])
+    return build("drive", "v3", credentials=creds)
+
+
+def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
+    service = get_drive_service()
+    if not service:
+        return None
+    filename = os.path.basename(filepath)
+    file_metadata = {"name": filename, "parents": [folder_id]}
+    media = MediaFileUpload(filepath, mimetype="text/csv")
+    uploaded = service.files().create(body=file_metadata, media_body=media, fields="id,webViewLink").execute()
+    print(f"Uploaded to Drive: {filename} ({uploaded.get('webViewLink')})")
+    return uploaded
 
 
 
@@ -210,8 +239,14 @@ def download_report(context, page, report_name, start_date, end_date):
     return filename
 
 
+print("Script starting...")
+import sys
+sys.stdout.flush()
+
 with sync_playwright() as p:
+    print("Playwright started.")
     browser, context = create_browser_and_context(p)
+    print("Browser launched.")
     page = context.new_page()
 
     try:
@@ -227,7 +262,8 @@ with sync_playwright() as p:
 
         reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash"]
         for report in reports:
-            download_report(context, page, report, START_DATE, END_DATE)
+            filename = download_report(context, page, report, START_DATE, END_DATE)
+            upload_to_drive(filename)
             save_cookies(context)
 
     except Exception as e:
