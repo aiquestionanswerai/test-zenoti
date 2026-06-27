@@ -35,13 +35,17 @@ def create_browser_and_context(pw):
     }
     if IS_LOCAL:
         launch_args["channel"] = "chrome"
+    else:
+        launch_args["args"] = launch_args.get("args", []) + [
+            "--no-sandbox",
+            "--disable-dev-shm-usage"
+        ]
+        browser = pw.chromium.launch(**launch_args)
 
-    browser = pw.chromium.launch(**launch_args)
-
-    context_args = {"no_viewport": True}
-    if os.path.exists(COOKIES_FILE):
-        print(f"Loading saved cookies from {COOKIES_FILE}")
-        context_args["storage_state"] = COOKIES_FILE
+        context_args = {"no_viewport": True}
+        if os.path.exists(COOKIES_FILE):
+            print(f"Loading saved cookies from {COOKIES_FILE}")
+            context_args["storage_state"] = COOKIES_FILE
 
     context = browser.new_context(**context_args)
     context.add_init_script("""
