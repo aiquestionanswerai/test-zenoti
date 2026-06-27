@@ -7,3 +7,4 @@ debug_*.png
 error_*.png
 dashboard_load_error.png
 .venv/
+pw-browsers/
