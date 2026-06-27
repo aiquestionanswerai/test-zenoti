@@ -11,4 +11,6 @@ RUN python -m playwright install chromium
 
 COPY . .
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers
+
 CMD ["python", "miner.py"]
