@@ -6,14 +6,11 @@ import re
 import os
 from datetime import date, timedelta
 from dotenv import load_dotenv
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/pw-browsers"
 
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path)
 
-browsers_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH")
-if browsers_path:
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
-    
 USERNAME = os.getenv("MINER_USER")
 PASSWORD = os.getenv("MINER_PASSWORD")
 ADMIN_URL = "https://evolvemedspa.zenoti.com/Admin/Admin.aspx"
