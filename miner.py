@@ -1,12 +1,13 @@
+import os
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/pw-browsers"  # Must be before playwright import
+
 from playwright.sync_api import sync_playwright
 import json
 import time
 import random
 import re
-import os
 from datetime import date, timedelta
 from dotenv import load_dotenv
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/pw-browsers"
 
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path)
@@ -26,35 +27,6 @@ END_DATE = yesterday
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
 
 
-# def create_browser_and_context(pw):
-#     launch_args = {
-#         "headless": True,
-#         "args": [
-#             "--start-maximized",
-#             "--disable-blink-features=AutomationControlled",
-#         ],
-#     }
-#     if IS_LOCAL:
-#         launch_args["channel"] = "chrome"
-#     else:
-#         launch_args["args"] = launch_args.get("args", []) + [
-#             "--no-sandbox",
-#             "--disable-dev-shm-usage"
-#         ]
-#         browser = pw.chromium.launch(**launch_args)
-
-#         context_args = {"no_viewport": True}
-#         if os.path.exists(COOKIES_FILE):
-#             print(f"Loading saved cookies from {COOKIES_FILE}")
-#             context_args["storage_state"] = COOKIES_FILE
-
-#     context = browser.new_context(**context_args)
-#     context.add_init_script("""
-#         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-#         window.chrome = {runtime: {}};
-#     """)
-#     return browser, context
-
 def create_browser_and_context(pw):
     launch_args = {
         "headless": True,
@@ -64,15 +36,13 @@ def create_browser_and_context(pw):
         ],
     }
 
-    if IS_LOCAL:
-        launch_args["channel"] = "chrome"
-    else:
+    if not IS_LOCAL:
         launch_args["args"] += [
             "--no-sandbox",
             "--disable-dev-shm-usage",
         ]
 
-    # Browser is always created, regardless of IS_LOCAL
+    # Always use chromium (no channel), works both local and Railway
     browser = pw.chromium.launch(**launch_args)
 
     context_args = {"no_viewport": True}
@@ -87,6 +57,7 @@ def create_browser_and_context(pw):
     """)
     return browser, context
 
+
 def save_cookies(context):
     context.storage_state(path=COOKIES_FILE)
     print(f"Cookies saved to {COOKIES_FILE}")
@@ -95,17 +66,28 @@ def save_cookies(context):
 def needs_login(page):
     """Check if current page is login page or admin dashboard."""
     page.goto(ADMIN_URL, wait_until="domcontentloaded")
-    try:
-        page.wait_for_url("**/Admin/**", timeout=10000)
+    time.sleep(3)
+    current_url = page.url
+    print(f"Current URL after navigation: {current_url}")
+    if "Admin" in current_url and "Login" not in current_url and "Account" not in current_url:
         return False
-    except:
-        return True
+    return True
 
 
 def do_login(page):
-    print("Waiting for IDS login redirect...")
-    page.wait_for_url("**/Account/Login**", timeout=30000)
-    print("Redirected to IDS login page.")
+    print(f"Current URL before login: {page.url}")
+    print("Waiting for login page...")
+
+    # Wait for either SSO or direct login page
+    try:
+        page.wait_for_url("**/Account/Login**", timeout=15000)
+        print("Redirected to IDS login page.")
+    except:
+        current_url = page.url
+        print(f"URL after wait: {current_url}")
+        if "Admin" in current_url and "Login" not in current_url:
+            print("Already logged in!")
+            return
 
     username_sel = "input#Username, input[name='Username'], input[name='username'], input[type='email']"
     page.wait_for_selector(username_sel, state="visible", timeout=15000)
@@ -142,7 +124,6 @@ def wait_for_dashboard(page):
 
 
 def download_report(context, page, report_name, start_date, end_date):
-    # Navigate directly to reports dashboard
     page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
     page.wait_for_load_state("networkidle")
     time.sleep(3)
@@ -158,11 +139,9 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(3)
     print(f"{report_name} report page loaded.")
 
-    # Open date picker and select Custom
     report_page.locator('#elm_dates').click()
     time.sleep(3)
 
-    # Use exact data-range-key attribute + JS click fallback
     try:
         report_page.locator('li[data-range-key="Custom"]').click(timeout=5000)
     except:
@@ -187,7 +166,6 @@ def download_report(context, page, report_name, start_date, end_date):
     select_calendar_date(report_page, end_date, "right")
     time.sleep(2)
 
-    # Click Apply via JS to bypass visibility issues
     report_page.evaluate("document.querySelector('button.applyBtn').click()")
     time.sleep(3)
     print("Date range set.")
@@ -197,7 +175,6 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(3)
     report_page.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(3)
-
 
     print("Exporting report to CSV...")
     report_page.locator('#dropdownMenuLink').click()
