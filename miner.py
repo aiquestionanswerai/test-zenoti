@@ -79,15 +79,10 @@ def needs_login(page):
 
 
 def do_login(page):
-    if "Account/Login" not in page.url:
-        print("Waiting for IDS login redirect...")
-        page.goto(ADMIN_URL, wait_until="domcontentloaded")
-        if "Account/Login" not in page.url:
-            page.wait_for_url("**/Account/Login**", timeout=30000)
-    print(f"On login page: {page.url}")
-
     username_sel = "input#Username, input[name='Username'], input[name='username'], input[type='email']"
-    page.wait_for_selector(username_sel, state="visible", timeout=15000)
+    print(f"Current URL: {page.url}")
+    print("Waiting for login form...")
+    page.wait_for_selector(username_sel, state="visible", timeout=30000)
     print("Login page loaded.")
 
     page.locator(username_sel).first.click()
