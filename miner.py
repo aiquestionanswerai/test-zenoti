@@ -25,6 +25,35 @@ END_DATE = yesterday
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
 
 
+# def create_browser_and_context(pw):
+#     launch_args = {
+#         "headless": True,
+#         "args": [
+#             "--start-maximized",
+#             "--disable-blink-features=AutomationControlled",
+#         ],
+#     }
+#     if IS_LOCAL:
+#         launch_args["channel"] = "chrome"
+#     else:
+#         launch_args["args"] = launch_args.get("args", []) + [
+#             "--no-sandbox",
+#             "--disable-dev-shm-usage"
+#         ]
+#         browser = pw.chromium.launch(**launch_args)
+
+#         context_args = {"no_viewport": True}
+#         if os.path.exists(COOKIES_FILE):
+#             print(f"Loading saved cookies from {COOKIES_FILE}")
+#             context_args["storage_state"] = COOKIES_FILE
+
+#     context = browser.new_context(**context_args)
+#     context.add_init_script("""
+#         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+#         window.chrome = {runtime: {}};
+#     """)
+#     return browser, context
+
 def create_browser_and_context(pw):
     launch_args = {
         "headless": True,
@@ -33,19 +62,22 @@ def create_browser_and_context(pw):
             "--disable-blink-features=AutomationControlled",
         ],
     }
+
     if IS_LOCAL:
         launch_args["channel"] = "chrome"
     else:
-        launch_args["args"] = launch_args.get("args", []) + [
+        launch_args["args"] += [
             "--no-sandbox",
-            "--disable-dev-shm-usage"
+            "--disable-dev-shm-usage",
         ]
-        browser = pw.chromium.launch(**launch_args)
 
-        context_args = {"no_viewport": True}
-        if os.path.exists(COOKIES_FILE):
-            print(f"Loading saved cookies from {COOKIES_FILE}")
-            context_args["storage_state"] = COOKIES_FILE
+    # Browser is always created, regardless of IS_LOCAL
+    browser = pw.chromium.launch(**launch_args)
+
+    context_args = {"no_viewport": True}
+    if os.path.exists(COOKIES_FILE):
+        print(f"Loading saved cookies from {COOKIES_FILE}")
+        context_args["storage_state"] = COOKIES_FILE
 
     context = browser.new_context(**context_args)
     context.add_init_script("""
@@ -53,7 +85,6 @@ def create_browser_and_context(pw):
         window.chrome = {runtime: {}};
     """)
     return browser, context
-
 
 def save_cookies(context):
     context.storage_state(path=COOKIES_FILE)
