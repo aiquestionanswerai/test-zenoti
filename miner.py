@@ -54,7 +54,7 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
     filename = os.path.basename(filepath)
     file_metadata = {"name": filename, "parents": [folder_id]}
     media = MediaFileUpload(filepath, mimetype="text/csv")
-    uploaded = service.files().create(body=file_metadata, media_body=media, fields="id,webViewLink").execute()
+    uploaded = service.files().create(body=file_metadata, media_body=media, fields="id,webViewLink", supportsAllDrives=True).execute()
     print(f"Uploaded to Drive: {filename} ({uploaded.get('webViewLink')})")
     return uploaded
 
