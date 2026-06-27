@@ -14,6 +14,7 @@ import time
 import random
 import re
 import sys
+import glob
 from datetime import date, timedelta
 from dotenv import load_dotenv
 
@@ -38,6 +39,13 @@ END_DATE = yesterday
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
 
 DRIVE_FOLDER_ID = "1wKLZcbe8p9Qpgl9g9KZ4G6bGk__JowY5"
+REPORT_FOLDERS = {
+    "Attendance": "1YKoroJ8l_YSlQGCEBvp9vJIm8sFZOzX0",
+    "Cost of Goods": "1M6xHpZAKtBlu6ageNr2KhZYxOTX9iExg",
+    "Sales-Cash": "1FXYnXXQiwQxVAu8IBQOm5GROddoBOXwp",
+    "Appointments": "12jqbWWMgpgioR_23KJKLXSvDignwrcP2",
+    "Sales-Accrual": "1TBdw_u-ADwb3m6GH-HY4WOVYblIPBxd-",
+}
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 
@@ -95,7 +103,19 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
         ).execute()
 
     print(f"Uploaded to Drive: {filename} ({uploaded.get('webViewLink')})")
+
+    if not uploaded or not uploaded.get('id'):
+        raise Exception(f"Upload failed: {filename}")
+
     return uploaded
+
+
+def cleanup_old_csvs():
+    script_dir = os.path.dirname(__file__) or "."
+    for f in glob.glob(os.path.join(script_dir, "*.csv")):
+        if yesterday not in os.path.basename(f):
+            os.remove(f)
+            print(f"Cleaned up old CSV: {f}")
 
 
 def create_browser_and_context(pw):
@@ -228,11 +248,18 @@ def download_report(context, page, report_name, start_date, end_date):
         day_val = str(int(day))
         cal = f'.drp-calendar.{side}'
 
-        rp.locator(f'{cal} .yearselect').first.select_option(year)
+        rp.wait_for_selector(f'{cal} .yearselect', state='attached', timeout=10000)
+
+        rp.evaluate(f"document.querySelector('{cal} .yearselect').value = '{year}'; document.querySelector('{cal} .yearselect').dispatchEvent(new Event('change'))")
         time.sleep(1)
-        rp.locator(f'{cal} .monthselect').first.select_option(month_val)
+
+        rp.evaluate(f"document.querySelector('{cal} .monthselect').value = '{month_val}'; document.querySelector('{cal} .monthselect').dispatchEvent(new Event('change'))")
         time.sleep(1)
-        rp.locator(f'{cal} td.available:not(.off)').filter(has_text=re.compile(f"^{day_val}$")).first.click()
+
+        rp.evaluate(f"""
+            var cells = document.querySelectorAll('{cal} td.available:not(.off)');
+            for (var c of cells) {{ if (c.textContent.trim() === '{day_val}') {{ c.click(); break; }} }}
+        """)
         time.sleep(1)
 
     select_calendar_date(report_page, start_date, "left")
@@ -241,14 +268,18 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(2)
 
     report_page.evaluate("document.querySelector('button.applyBtn').click()")
-    time.sleep(3)
+    time.sleep(1)
+    report_page.evaluate("""
+        var dp = document.querySelector('.daterangepicker');
+        if (dp) { dp.style.display = 'none'; dp.classList.remove('show-calendar', 'show-ranges'); }
+    """)
+    time.sleep(2)
     print("Date range set.")
 
     print("Refreshing report...")
-    report_page.locator('#btnRefresh').click()
-    time.sleep(3)
+    report_page.evaluate("document.querySelector('#btnRefresh').click()")
+    time.sleep(2)
     report_page.wait_for_load_state("networkidle", timeout=60000)
-    time.sleep(3)
 
     print("Exporting report to CSV...")
     report_page.locator('#dropdownMenuLink').click()
@@ -262,6 +293,10 @@ def download_report(context, page, report_name, start_date, end_date):
     safe_name = report_name.replace(" ", "_").lower()
     filename = f"{safe_name}_{start_date}_to_{end_date}.csv"
     download.save_as(filename)
+
+    if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+        raise Exception(f"Download failed or empty: {filename}")
+
     print(f"Downloaded: {filename}")
 
     report_page.close()
@@ -273,6 +308,7 @@ def download_report(context, page, report_name, start_date, end_date):
 
 print("Script starting...")
 sys.stdout.flush()
+cleanup_old_csvs()
 
 with sync_playwright() as p:
     print("Playwright started.")
@@ -292,9 +328,13 @@ with sync_playwright() as p:
         save_cookies(context)
 
         reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash"]
+        # reports = ["Sales-Cash"]
         for report in reports:
             filename = download_report(context, page, report, START_DATE, END_DATE)
-            upload_to_drive(filename)
+            folder_id = REPORT_FOLDERS.get(report, DRIVE_FOLDER_ID)
+            upload_to_drive(filename, folder_id)
+            os.remove(filename)
+            print(f"Deleted local file: {filename}")
             save_cookies(context)
 
     except Exception as e:
