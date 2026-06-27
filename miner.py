@@ -1,29 +1,32 @@
+import os
+
+# Must be before playwright import
+if os.getenv("RAILWAY_ENVIRONMENT"):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/pw-browsers"
+
 from playwright.sync_api import sync_playwright
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 import json
 import time
 import random
 import re
-import os
 import sys
 from datetime import date, timedelta
 from dotenv import load_dotenv
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+
 print("Imports done.", flush=True)
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/pw-browsers"
 
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path)
-
-browsers_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH")
-if browsers_path:
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
 
 USERNAME = os.getenv("MINER_USER")
 PASSWORD = os.getenv("MINER_PASSWORD")
 ADMIN_URL = "https://evolvemedspa.zenoti.com/Admin/Admin.aspx"
 COOKIES_FILE = os.path.join(os.path.dirname(__file__), "cookies.json")
+TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.json")
 
 if not USERNAME or not PASSWORD:
     raise ValueError("MINER_USER and MINER_PASSWORD must be set in the .env file.")
@@ -35,29 +38,64 @@ END_DATE = yesterday
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
 
 DRIVE_FOLDER_ID = "1wKLZcbe8p9Qpgl9g9KZ4G6bGk__JowY5"
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 
 def get_drive_service():
-    creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-    if not creds_json:
-        print("GOOGLE_SERVICE_ACCOUNT_JSON not set. Skipping upload.")
-        return None
-    creds_info = json.loads(creds_json)
-    creds = Credentials.from_service_account_info(creds_info, scopes=["https://www.googleapis.com/auth/drive.file"])
-    return build("drive", "v3", credentials=creds)
+    from google.auth.transport.requests import Request
 
+    token_json = os.getenv("GOOGLE_TOKEN_JSON")
+    if not token_json:
+        print("GOOGLE_TOKEN_JSON not set. Skipping upload.")
+        return None
+
+    creds_info = json.loads(token_json)
+    creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
+
+    # Refresh if expired
+    if creds.expired and creds.refresh_token:
+        print("Refreshing Google OAuth token...")
+        creds.refresh(Request())
+        # Note: can't save back to env var on Railway, but refresh_token stays valid
+        print("Token refreshed.")
+
+    return build("drive", "v3", credentials=creds)
 
 def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
     service = get_drive_service()
     if not service:
         return None
+
     filename = os.path.basename(filepath)
-    file_metadata = {"name": filename, "parents": [folder_id]}
     media = MediaFileUpload(filepath, mimetype="text/csv")
-    uploaded = service.files().create(body=file_metadata, media_body=media, fields="id,webViewLink", supportsAllDrives=True).execute()
+
+    # Check if file already exists in folder
+    results = service.files().list(
+        q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+        fields="files(id, name)",
+    ).execute()
+
+    existing = results.get("files", [])
+
+    if existing:
+        file_id = existing[0]["id"]
+        print(f"File exists, updating: {filename}")
+        uploaded = service.files().update(
+            fileId=file_id,
+            media_body=media,
+            fields="id,webViewLink",
+        ).execute()
+    else:
+        print(f"Creating new file: {filename}")
+        file_metadata = {"name": filename, "parents": [folder_id]}
+        uploaded = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id,webViewLink",
+        ).execute()
+
     print(f"Uploaded to Drive: {filename} ({uploaded.get('webViewLink')})")
     return uploaded
-
 
 
 def create_browser_and_context(pw):
@@ -77,7 +115,6 @@ def create_browser_and_context(pw):
             "--disable-dev-shm-usage",
         ]
 
-    # Browser is always created, regardless of IS_LOCAL
     browser = pw.chromium.launch(**launch_args)
 
     context_args = {"no_viewport": True, "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
@@ -92,13 +129,13 @@ def create_browser_and_context(pw):
     """)
     return browser, context
 
+
 def save_cookies(context):
     context.storage_state(path=COOKIES_FILE)
     print(f"Cookies saved to {COOKIES_FILE}")
 
 
 def needs_login(page):
-    """Check if current page is login page or admin dashboard."""
     print(f"Checking if login is needed. Current URL: {page.url}")
     page.goto(ADMIN_URL, wait_until="domcontentloaded")
     try:
@@ -161,7 +198,6 @@ def wait_for_dashboard(page):
 
 
 def download_report(context, page, report_name, start_date, end_date):
-    # Navigate directly to reports dashboard
     page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
     page.wait_for_load_state("networkidle")
     time.sleep(3)
@@ -177,11 +213,9 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(3)
     print(f"{report_name} report page loaded.")
 
-    # Open date picker and select Custom
     report_page.locator('#elm_dates').click()
     time.sleep(3)
 
-    # Use exact data-range-key attribute + JS click fallback
     try:
         report_page.locator('li[data-range-key="Custom"]').click(timeout=5000)
     except:
@@ -206,7 +240,6 @@ def download_report(context, page, report_name, start_date, end_date):
     select_calendar_date(report_page, end_date, "right")
     time.sleep(2)
 
-    # Click Apply via JS to bypass visibility issues
     report_page.evaluate("document.querySelector('button.applyBtn').click()")
     time.sleep(3)
     print("Date range set.")
@@ -216,7 +249,6 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(3)
     report_page.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(3)
-
 
     print("Exporting report to CSV...")
     report_page.locator('#dropdownMenuLink').click()
@@ -240,7 +272,6 @@ def download_report(context, page, report_name, start_date, end_date):
 
 
 print("Script starting...")
-import sys
 sys.stdout.flush()
 
 with sync_playwright() as p:
