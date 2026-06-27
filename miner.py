@@ -4,6 +4,7 @@ import time
 import random
 import re
 import os
+from datetime import date, timedelta
 from dotenv import load_dotenv
 
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -17,8 +18,9 @@ COOKIES_FILE = os.path.join(os.path.dirname(__file__), "cookies.json")
 if not USERNAME or not PASSWORD:
     raise ValueError("MINER_USER and MINER_PASSWORD must be set in the .env file.")
 
-START_DATE = input("Please enter the Start Date (YYYY-MM-DD): ")
-END_DATE = input("Please enter the End Date (YYYY-MM-DD): ")
+yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+START_DATE = yesterday
+END_DATE = yesterday
 
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
 
