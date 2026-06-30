@@ -14,8 +14,9 @@ import time
 import random
 import re
 import sys
+import io
 import glob
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from dotenv import load_dotenv
 
 print("Imports done.", flush=True)
@@ -39,6 +40,7 @@ END_DATE = yesterday
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
 
 DRIVE_FOLDER_ID = "1wKLZcbe8p9Qpgl9g9KZ4G6bGk__JowY5"
+DONE_FOLDER_ID = "1icNO-KvNyolmdOAL7d4HSacKVMR72nmz"
 REPORT_FOLDERS = {
     "Attendance": "1YKoroJ8l_YSlQGCEBvp9vJIm8sFZOzX0",
     "Cost of Goods": "1M6xHpZAKtBlu6ageNr2KhZYxOTX9iExg",
@@ -87,20 +89,21 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
 
     if existing:
         file_id = existing[0]["id"]
-        print(f"File exists, updating: {filename}")
-        uploaded = service.files().update(
+        print(f"Moving previous file to Done folder: {filename}")
+        service.files().update(
             fileId=file_id,
-            media_body=media,
-            fields="id,webViewLink",
+            addParents=DONE_FOLDER_ID,
+            removeParents=folder_id,
+            fields="id",
         ).execute()
-    else:
-        print(f"Creating new file: {filename}")
-        file_metadata = {"name": filename, "parents": [folder_id]}
-        uploaded = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id,webViewLink",
-        ).execute()
+
+    print(f"Uploading new file: {filename}")
+    file_metadata = {"name": filename, "parents": [folder_id]}
+    uploaded = service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id,webViewLink",
+    ).execute()
 
     print(f"Uploaded to Drive: {filename} ({uploaded.get('webViewLink')})")
 
@@ -120,7 +123,7 @@ def cleanup_old_csvs():
 
 def create_browser_and_context(pw):
     launch_args = {
-        "headless": True,
+        "headless": False,
         "args": [
             "--start-maximized",
             "--disable-blink-features=AutomationControlled",
@@ -217,6 +220,160 @@ def wait_for_dashboard(page):
         raise e
 
 
+def apply_appointments_filters(report_page):
+    print("  Applying Appointments filters...")
+    report_page.evaluate("""
+        (function() {
+            // All multi-selects → selectAll (Centers, Appointment Status, Appointment Source)
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+            // Date Type (single select) → Appointment Date
+            $('select:not([multiple])').each(function() {
+                var opts = Array.from(this.options);
+                var match = opts.find(function(o) { return o.text.trim().indexOf('Appointment Date') !== -1; });
+                if (match) {
+                    $(this).multiselect('select', match.value);
+                }
+            });
+        })();
+    """)
+    time.sleep(1)
+    print("  Appointments filters applied.")
+
+
+def apply_attendance_filters(report_page):
+    print("  Applying Attendance filters...")
+    report_page.evaluate("""
+        (function() {
+            // Zenoti dropdowns: Centers + Employee Jobs → All
+            ['elm_centers', 'elm_employee_jobs'].forEach(function(id) {
+                var cb = document.getElementById(id + '-zenoti-dropdown-options-all');
+                if (cb && !cb.checked) cb.click();
+            });
+
+            // All multi-selects → selectAll
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+
+            // Override: Schedule Status → Working only
+            $('select').each(function() {
+                var opts = Array.from(this.options);
+                if (opts.some(function(o) { return o.value === '6a9d2c87-d452-471f-ba33-90af26ae4edb'; })) {
+                    $(this).multiselect('deselectAll', false);
+                    $(this).multiselect('select', ['6a9d2c87-d452-471f-ba33-90af26ae4edb']);
+                }
+            });
+
+            // Single selects: View By → Date, Check-in/Checkout Status → All
+            $('select:not([multiple])').each(function() {
+                var opts = Array.from(this.options);
+                var texts = opts.map(function(o) { return o.text.trim(); });
+                if (texts.indexOf('Date') !== -1 && texts.indexOf('Check-in') !== -1) {
+                    $(this).multiselect('select', '1');
+                } else if (texts.some(function(t) { return t.indexOf('Missed check-ins') !== -1; })) {
+                    $(this).multiselect('select', '0');
+                }
+            });
+        })();
+    """)
+    time.sleep(1)
+    print("  Attendance filters applied.")
+
+
+def apply_cost_of_goods_filters(report_page):
+    print("  Applying Cost of Goods filters...")
+    report_page.evaluate("""
+        (function() {
+            // All multi-selects → selectAll (Centers, Product Type, Consumption Type, Brand, Category, Sub Category, Business Unit)
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+            // Stock Costing Method (single select) → Perpetual Average Cost
+            $('select:not([multiple])').each(function() {
+                var opts = Array.from(this.options);
+                if (opts.some(function(o) { return o.text.indexOf('Perpetual') !== -1; })) {
+                    $(this).multiselect('select', '1');
+                }
+            });
+        })();
+    """)
+    time.sleep(1)
+    print("  Cost of Goods filters applied.")
+
+
+def apply_sales_accrual_filters(report_page):
+    print("  Applying Sales-Accrual filters...")
+    report_page.evaluate("""
+        (function() {
+            // Zenoti dropdown: Centers → All
+            var cb = document.getElementById('elm_centers-zenoti-dropdown-options-all');
+            if (cb && !cb.checked) cb.click();
+
+            // All multi-selects → selectAll (Category, Sub Category, Business Unit, Payment Type, Sale Type, Invoice Status)
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+
+            // Override: Item Type → Service + Product only
+            var $itemType = $('#elm_item_type');
+            if ($itemType.length) {
+                $itemType.multiselect('deselectAll', false);
+                $itemType.multiselect('select', ['Service', 'Product']);
+            }
+        })();
+    """)
+    time.sleep(1)
+    selected = report_page.evaluate(
+        "Array.from(document.querySelectorAll('#elm_item_type option')).filter(function(o){return o.selected}).map(function(o){return o.value})"
+    )
+    print(f"  Item Type selected: {selected}")
+    print("  Sales-Accrual filters applied.")
+
+
+def apply_sales_cash_filters(report_page):
+    print("  Applying Sales-Cash filters...")
+    report_page.evaluate("""
+        (function() {
+            // Zenoti dropdown: Centers → All
+            var cb = document.getElementById('elm_centers-zenoti-dropdown-options-all');
+            if (cb && !cb.checked) cb.click();
+
+            // Level of Detail (single select) → Item
+            var $lod = $('#elm_level_of_detail');
+            if ($lod.length) {
+                $lod.multiselect('select', '1');
+            }
+
+            // All multi-selects → selectAll (Item Type, Category, Sub Category, Business Unit, Sale Type, Invoice Status)
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+
+            // Override: Payment Type → Cash, Card, Check, Custom-Financial, CustomNon-Financial only
+            $('select[multiple]').each(function() {
+                var values = Array.from(this.options).map(function(o) { return o.value; });
+                if (values.indexOf('32') !== -1 && values.indexOf('16') !== -1) {
+                    $(this).multiselect('deselectAll', false);
+                    $(this).multiselect('select', ['0', '1', '2', '3', '4']);
+                }
+            });
+        })();
+    """)
+    time.sleep(1)
+    print("  Sales-Cash filters applied.")
+
+
+REPORT_FILTERS = {
+    "Appointments": apply_appointments_filters,
+    "Attendance": apply_attendance_filters,
+    "Cost of Goods": apply_cost_of_goods_filters,
+    "Sales-Accrual": apply_sales_accrual_filters,
+    "Sales-Cash": apply_sales_cash_filters,
+}
+
+
 def download_report(context, page, report_name, start_date, end_date):
     page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
     page.wait_for_load_state("networkidle")
@@ -233,48 +390,34 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(3)
     print(f"{report_name} report page loaded.")
 
-    report_page.locator('#elm_dates').click()
-    time.sleep(3)
+    if report_name == "Sales-Accrual":
+        start_dt = f"{start_date} 00:00"
+        end_dt = f"{end_date} 23:59"
+        dt_format = "YYYY-MM-DD HH:mm"
+    else:
+        start_dt = start_date
+        end_dt = end_date
+        dt_format = "YYYY-MM-DD"
 
-    try:
-        report_page.locator('li[data-range-key="Custom"]').click(timeout=5000)
-    except:
-        report_page.evaluate("document.querySelector('li[data-range-key=\"Custom\"]').click()")
-    time.sleep(3)
-
-    def select_calendar_date(rp, date_str, side):
-        year, month, day = date_str.split('-')
-        month_val = str(int(month) - 1)
-        day_val = str(int(day))
-        cal = f'.drp-calendar.{side}'
-
-        rp.wait_for_selector(f'{cal} .yearselect', state='attached', timeout=10000)
-
-        rp.evaluate(f"document.querySelector('{cal} .yearselect').value = '{year}'; document.querySelector('{cal} .yearselect').dispatchEvent(new Event('change'))")
-        time.sleep(1)
-
-        rp.evaluate(f"document.querySelector('{cal} .monthselect').value = '{month_val}'; document.querySelector('{cal} .monthselect').dispatchEvent(new Event('change'))")
-        time.sleep(1)
-
-        rp.evaluate(f"""
-            var cells = document.querySelectorAll('{cal} td.available:not(.off)');
-            for (var c of cells) {{ if (c.textContent.trim() === '{day_val}') {{ c.click(); break; }} }}
-        """)
-        time.sleep(1)
-
-    select_calendar_date(report_page, start_date, "left")
-    time.sleep(2)
-    select_calendar_date(report_page, end_date, "right")
-    time.sleep(2)
-
-    report_page.evaluate("document.querySelector('button.applyBtn').click()")
-    time.sleep(1)
-    report_page.evaluate("""
-        var dp = document.querySelector('.daterangepicker');
-        if (dp) { dp.style.display = 'none'; dp.classList.remove('show-calendar', 'show-ranges'); }
+    report_page.evaluate(f"""
+        (function() {{
+            var picker = $('#elm_dates').data('daterangepicker');
+            if (picker) {{
+                var startDate = moment('{start_dt}', '{dt_format}');
+                var endDate = moment('{end_dt}', '{dt_format}');
+                picker.setStartDate(startDate);
+                picker.setEndDate(endDate);
+                picker.element.trigger('apply.daterangepicker', picker);
+            }}
+        }})();
     """)
     time.sleep(2)
     print("Date range set.")
+
+    filter_fn = REPORT_FILTERS.get(report_name)
+    if filter_fn:
+        filter_fn(report_page)
+    time.sleep(1)
 
     print("Refreshing report...")
     report_page.evaluate("document.querySelector('#btnRefresh').click()")
@@ -286,7 +429,7 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(3)
 
     with report_page.expect_download() as download_info:
-        report_page.locator('#export_csv').click()
+        report_page.evaluate("document.querySelector('#export_csv').click()")
 
     time.sleep(3)
     download = download_info.value
@@ -308,6 +451,27 @@ def download_report(context, page, report_name, start_date, end_date):
 
 print("Script starting...")
 sys.stdout.flush()
+
+LOG_FILENAME = f"logs_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt"
+log_file = open(LOG_FILENAME, "w", encoding="utf-8")
+
+
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+sys.stdout = Tee(sys.__stdout__, log_file)
+
 cleanup_old_csvs()
 
 with sync_playwright() as p:
@@ -328,17 +492,29 @@ with sync_playwright() as p:
         save_cookies(context)
 
         reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash"]
-        # reports = ["Sales-Cash"]
+        # reports = ["Sales-Accrual"]
         for report in reports:
             filename = download_report(context, page, report, START_DATE, END_DATE)
             folder_id = REPORT_FOLDERS.get(report, DRIVE_FOLDER_ID)
             upload_to_drive(filename, folder_id)
             os.remove(filename)
-            print(f"Deleted local file: {filename}")
             save_cookies(context)
+
+        print("Logging out...")
+        page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
+        page.wait_for_load_state("networkidle")
+        page.locator('#usernameBtn').click()
+        page.locator('.userLogoutCls').click()
+        time.sleep(5)
+        print("Logged out.")
 
     except Exception as e:
         print(f"Error: {e}")
     finally:
         context.close()
         browser.close()
+
+    sys.stdout = sys.__stdout__
+    log_file.close()
+    upload_to_drive(LOG_FILENAME, DRIVE_FOLDER_ID)
+    os.remove(LOG_FILENAME)
