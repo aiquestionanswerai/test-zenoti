@@ -16,7 +16,9 @@ import re
 import sys
 import io
 import glob
+import csv
 from datetime import date, datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 
 print("Imports done.", flush=True)
@@ -33,9 +35,20 @@ TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.json")
 if not USERNAME or not PASSWORD:
     raise ValueError("MINER_USER and MINER_PASSWORD must be set in the .env file.")
 
-yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-START_DATE = yesterday
-END_DATE = yesterday
+# yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+# START_DATE = yesterday
+# END_DATE = yesterday
+
+today = date.today()
+date_to = today - timedelta(days=1)
+first_day_this_month = today.replace(day=1)
+date_from = first_day_this_month - relativedelta(months=1)
+
+START_DATE = date_from.strftime("%Y-%m-%d")
+END_DATE = date_to.strftime("%Y-%m-%d")
+
+print("Date From:", date_from.strftime("%m/%d/%Y"))
+print("Date To  :", date_to.strftime("%m/%d/%Y"))
 
 IS_LOCAL = os.getenv("RAILWAY_ENVIRONMENT") is None
 
@@ -77,33 +90,33 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
         return None
 
     filename = os.path.basename(filepath)
-    media = MediaFileUpload(filepath, mimetype="text/csv")
 
-    # Check if file already exists in folder
+    # Move ALL existing files in folder to Done before uploading
     results = service.files().list(
-        q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+        q=f"'{folder_id}' in parents and trashed=false",
         fields="files(id, name)",
     ).execute()
 
     existing = results.get("files", [])
-
-    if existing:
-        file_id = existing[0]["id"]
-        print(f"Moving previous file to Done folder: {filename}")
+    for old_file in existing:
+        print(f"Moving previous file to Done folder: {old_file['name']}")
         service.files().update(
-            fileId=file_id,
+            fileId=old_file["id"],
             addParents=DONE_FOLDER_ID,
             removeParents=folder_id,
             fields="id",
         ).execute()
+        time.sleep(2)
 
     print(f"Uploading new file: {filename}")
     file_metadata = {"name": filename, "parents": [folder_id]}
+    media = MediaFileUpload(filepath, mimetype="text/csv", resumable=True)
     uploaded = service.files().create(
         body=file_metadata,
         media_body=media,
         fields="id,webViewLink",
     ).execute()
+    time.sleep(5)
 
     print(f"Uploaded to Drive: {filename} ({uploaded.get('webViewLink')})")
 
@@ -113,10 +126,52 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
     return uploaded
 
 
+def validate_csv(filepath):
+    filename = os.path.basename(filepath)
+
+    if not os.path.exists(filepath):
+        raise Exception(f"File not found: {filename}")
+
+    filesize = os.path.getsize(filepath)
+    if filesize == 0:
+        raise Exception(f"File is empty: {filename}")
+
+    filesize_mb = filesize / (1024 * 1024)
+    print(f"  File size: {filesize_mb:.2f} MB")
+
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        head = f.read(1024)
+
+    if "<html" in head.lower() or "<!doctype" in head.lower():
+        raise Exception(f"File is HTML, not CSV (possible error page): {filename}")
+
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        try:
+            headers = next(reader)
+        except StopIteration:
+            raise Exception(f"CSV has no headers: {filename}")
+
+        if len(headers) < 2:
+            raise Exception(f"CSV has only {len(headers)} column(s), likely corrupt: {filename}")
+
+        row_count = 0
+        for row in reader:
+            row_count += 1
+            if row_count >= 5:
+                break
+
+        if row_count == 0:
+            raise Exception(f"CSV has headers but no data rows: {filename}")
+
+    print(f"  CSV valid: {len(headers)} columns, {row_count}+ data rows")
+    return True
+
+
 def cleanup_old_csvs():
     script_dir = os.path.dirname(__file__) or "."
     for f in glob.glob(os.path.join(script_dir, "*.csv")):
-        if yesterday not in os.path.basename(f):
+        if date_to.strftime("%Y-%m-%d") not in os.path.basename(f):
             os.remove(f)
             print(f"Cleaned up old CSV: {f}")
 
@@ -238,7 +293,7 @@ def apply_appointments_filters(report_page):
             });
         })();
     """)
-    time.sleep(1)
+    time.sleep(2)
     print("  Appointments filters applied.")
 
 
@@ -278,7 +333,7 @@ def apply_attendance_filters(report_page):
             });
         })();
     """)
-    time.sleep(1)
+    time.sleep(2)
     print("  Attendance filters applied.")
 
 
@@ -299,7 +354,7 @@ def apply_cost_of_goods_filters(report_page):
             });
         })();
     """)
-    time.sleep(1)
+    time.sleep(2)
     print("  Cost of Goods filters applied.")
 
 
@@ -329,6 +384,7 @@ def apply_sales_accrual_filters(report_page):
         "Array.from(document.querySelectorAll('#elm_item_type option')).filter(function(o){return o.selected}).map(function(o){return o.value})"
     )
     print(f"  Item Type selected: {selected}")
+    time.sleep(2)
     print("  Sales-Accrual filters applied.")
 
 
@@ -361,7 +417,7 @@ def apply_sales_cash_filters(report_page):
             });
         })();
     """)
-    time.sleep(1)
+    time.sleep(2)
     print("  Sales-Cash filters applied.")
 
 
@@ -376,18 +432,18 @@ REPORT_FILTERS = {
 
 def download_report(context, page, report_name, start_date, end_date):
     page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
-    page.wait_for_load_state("networkidle")
-    time.sleep(3)
+    page.wait_for_load_state("networkidle", timeout=120000)
+    time.sleep(5)
     print(f"Opening report: {report_name}")
 
-    with context.expect_page() as new_page_info:
-        page.locator('#gridReports span.report-name').get_by_text(report_name, exact=True).click()
+    with context.expect_page(timeout=120000) as new_page_info:
+        page.locator('#gridReports span.report-name').get_by_text(report_name, exact=True).click(timeout=60000)
 
-    time.sleep(3)
+    time.sleep(5)
     report_page = new_page_info.value
-    report_page.wait_for_load_state("load")
-    report_page.wait_for_load_state("networkidle")
-    time.sleep(3)
+    report_page.wait_for_load_state("load", timeout=120000)
+    report_page.wait_for_load_state("networkidle", timeout=120000)
+    time.sleep(5)
     print(f"{report_name} report page loaded.")
 
     if report_name == "Sales-Accrual":
@@ -411,48 +467,50 @@ def download_report(context, page, report_name, start_date, end_date):
             }}
         }})();
     """)
-    time.sleep(2)
+    time.sleep(3)
     print("Date range set.")
 
     filter_fn = REPORT_FILTERS.get(report_name)
     if filter_fn:
         filter_fn(report_page)
-    time.sleep(1)
+    time.sleep(3)
 
     print("Refreshing report...")
     report_page.evaluate("document.querySelector('#btnRefresh').click()")
-    time.sleep(2)
-    report_page.wait_for_load_state("networkidle", timeout=60000)
+    time.sleep(10)
+    report_page.wait_for_load_state("networkidle", timeout=300000)
+    time.sleep(10)
 
     print("Exporting report to CSV...")
     report_page.locator('#dropdownMenuLink').click()
-    time.sleep(3)
+    time.sleep(5)
 
-    with report_page.expect_download() as download_info:
+    with report_page.expect_download(timeout=300000) as download_info:
         report_page.evaluate("document.querySelector('#export_csv').click()")
 
-    time.sleep(3)
+    time.sleep(15)
     download = download_info.value
     safe_name = report_name.replace(" ", "_").lower()
-    filename = f"{safe_name}_{start_date}_to_{end_date}.csv"
+    script_dir = os.path.dirname(__file__) or "."
+    filename = os.path.join(script_dir, f"{safe_name}_{start_date}_to_{end_date}.csv")
     download.save_as(filename)
+    time.sleep(10)
 
-    if not os.path.exists(filename) or os.path.getsize(filename) == 0:
-        raise Exception(f"Download failed or empty: {filename}")
-
+    print(f"Validating downloaded file: {filename}")
+    validate_csv(filename)
     print(f"Downloaded: {filename}")
 
     report_page.close()
-    time.sleep(3)
+    time.sleep(5)
     page.bring_to_front()
-    time.sleep(3)
+    time.sleep(5)
     return filename
 
 
 print("Script starting...")
 sys.stdout.flush()
 
-LOG_FILENAME = f"logs_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt"
+LOG_FILENAME = os.path.join(os.path.dirname(__file__) or ".", f"logs_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt")
 log_file = open(LOG_FILENAME, "w", encoding="utf-8")
 
 
@@ -499,12 +557,15 @@ with sync_playwright() as p:
             upload_to_drive(filename, folder_id)
             os.remove(filename)
             save_cookies(context)
+            time.sleep(10)
 
         print("Logging out...")
         page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
-        page.wait_for_load_state("networkidle")
-        page.locator('#usernameBtn').click()
-        page.locator('.userLogoutCls').click()
+        page.wait_for_load_state("networkidle", timeout=60000)
+        time.sleep(5)
+        page.locator('#usernameBtn').click(timeout=60000)
+        time.sleep(3)
+        page.locator('.userLogoutCls').click(timeout=60000)
         time.sleep(5)
         print("Logged out.")
 
