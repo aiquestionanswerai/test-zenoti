@@ -551,13 +551,74 @@ with sync_playwright() as p:
 
         reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash"]
         # reports = ["Sales-Accrual"]
+        failed_reports = []
+        succeeded_reports = []
+
         for report in reports:
-            filename = download_report(context, page, report, START_DATE, END_DATE)
-            folder_id = REPORT_FOLDERS.get(report, DRIVE_FOLDER_ID)
-            upload_to_drive(filename, folder_id)
-            os.remove(filename)
-            save_cookies(context)
-            time.sleep(10)
+            try:
+                filename = download_report(context, page, report, START_DATE, END_DATE)
+                folder_id = REPORT_FOLDERS.get(report, DRIVE_FOLDER_ID)
+                upload_to_drive(filename, folder_id)
+                os.remove(filename)
+                save_cookies(context)
+                succeeded_reports.append(report)
+                time.sleep(10)
+            except Exception as e:
+                print(f"FAILED: {report} — {e}")
+                failed_reports.append((report, str(e)))
+                for p in context.pages:
+                    if p != page:
+                        try:
+                            p.close()
+                        except Exception:
+                            pass
+                page.bring_to_front()
+                time.sleep(5)
+
+        if failed_reports:
+            print(f"\n--- Retrying {len(failed_reports)} failed report(s) ---")
+            relogin_ok = True
+            try:
+                if needs_login(page):
+                    print("Re-logging in before retry...")
+                    do_login(page)
+                    save_cookies(context)
+                    wait_for_dashboard(page)
+            except Exception as e:
+                print(f"Re-login failed, skipping retries: {e}")
+                relogin_ok = False
+
+            retry_still_failed = []
+            if not relogin_ok:
+                retry_still_failed = list(failed_reports)
+            for report, prev_error in (failed_reports if relogin_ok else []):
+                try:
+                    print(f"Retrying: {report}")
+                    filename = download_report(context, page, report, START_DATE, END_DATE)
+                    folder_id = REPORT_FOLDERS.get(report, DRIVE_FOLDER_ID)
+                    upload_to_drive(filename, folder_id)
+                    os.remove(filename)
+                    save_cookies(context)
+                    succeeded_reports.append(report)
+                    time.sleep(10)
+                except Exception as e:
+                    print(f"RETRY FAILED: {report} — {e}")
+                    retry_still_failed.append((report, str(e)))
+                    for p in context.pages:
+                        if p != page:
+                            try:
+                                p.close()
+                            except Exception:
+                                pass
+                    page.bring_to_front()
+                    time.sleep(5)
+
+            failed_reports = retry_still_failed
+
+        print(f"\n--- Report Summary ---")
+        print(f"Succeeded: {succeeded_reports}")
+        if failed_reports:
+            print(f"Failed: {[r for r, _ in failed_reports]}")
 
         print("Logging out...")
         page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
@@ -569,8 +630,12 @@ with sync_playwright() as p:
         time.sleep(5)
         print("Logged out.")
 
+        if failed_reports:
+            raise Exception(f"Reports failed after retry: {[r for r, _ in failed_reports]}")
+
     except Exception as e:
         print(f"Error: {e}")
+        raise
     finally:
         context.close()
         browser.close()
