@@ -473,17 +473,17 @@ def download_report(context, page, report_name, start_date, end_date):
     filter_fn = REPORT_FILTERS.get(report_name)
     if filter_fn:
         filter_fn(report_page)
-    time.sleep(3)
+    time.sleep(2)
 
     print("Refreshing report...")
     report_page.evaluate("document.querySelector('#btnRefresh').click()")
-    time.sleep(10)
+    time.sleep(5)
     report_page.wait_for_load_state("networkidle", timeout=300000)
     time.sleep(10)
 
     print("Exporting report to CSV...")
     report_page.locator('#dropdownMenuLink').click()
-    time.sleep(5)
+    time.sleep(2)
 
     with report_page.expect_download(timeout=300000) as download_info:
         report_page.evaluate("document.querySelector('#export_csv').click()")
@@ -501,9 +501,9 @@ def download_report(context, page, report_name, start_date, end_date):
     print(f"Downloaded: {filename}")
 
     report_page.close()
-    time.sleep(5)
+    time.sleep(2)
     page.bring_to_front()
-    time.sleep(5)
+    time.sleep(2)
     return filename
 
 
@@ -623,10 +623,10 @@ with sync_playwright() as p:
         print("Logging out...")
         page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
         page.wait_for_load_state("networkidle", timeout=60000)
-        time.sleep(5)
-        page.locator('#usernameBtn').click(timeout=60000)
-        time.sleep(3)
-        page.locator('.userLogoutCls').click(timeout=60000)
+        time.sleep(1)
+        page.locator('#usernameBtn').click
+        time.sleep(1)
+        page.locator('.userLogoutCls').click
         time.sleep(5)
         print("Logged out.")
 
