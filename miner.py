@@ -60,6 +60,7 @@ REPORT_FOLDERS = {
     "Sales-Cash": "1FXYnXXQiwQxVAu8IBQOm5GROddoBOXwp",
     "Appointments": "12jqbWWMgpgioR_23KJKLXSvDignwrcP2",
     "Sales-Accrual": "1TBdw_u-ADwb3m6GH-HY4WOVYblIPBxd-",
+    "Business KPI": "1GjkgXcKrGFqa8l9iM-rW8u2MeRVCaB_M",
 }
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
@@ -178,7 +179,7 @@ def cleanup_old_csvs():
 
 def create_browser_and_context(pw):
     launch_args = {
-        "headless": True,
+        "headless": False,
         "args": [
             "--start-maximized",
             "--disable-blink-features=AutomationControlled",
@@ -410,7 +411,7 @@ def apply_sales_cash_filters(report_page):
             // Override: Payment Type → Cash, Card, Check, Custom-Financial, CustomNon-Financial only
             $('select[multiple]').each(function() {
                 var values = Array.from(this.options).map(function(o) { return o.value; });
-                if (values.indexOf('32') !== -1 && values.indexOf('16') !== -1) {
+                if (values.indexOf('16') !== -1 && values.indexOf('10') !== -1) {
                     $(this).multiselect('deselectAll', false);
                     $(this).multiselect('select', ['0', '1', '2', '3', '4']);
                 }
@@ -421,12 +422,35 @@ def apply_sales_cash_filters(report_page):
     print("  Sales-Cash filters applied.")
 
 
+def apply_business_kpi_filters(report_page):
+    print("  Applying Business KPI filters...")
+    report_page.evaluate("""
+        (function() {
+            // Centers → All
+            var cb = document.getElementById('elm_centers-zenoti-dropdown-options-all');
+            if (cb && !cb.checked) cb.click();
+
+            // Invoice Status → select All
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+
+            // Uncheck 'Show Sales Including Tax'
+            var taxCb = document.getElementById('elm_include_tax');
+            if (taxCb && taxCb.checked) taxCb.click();
+        })();
+    """)
+    time.sleep(2)
+    print("  Business KPI filters applied.")
+
+
 REPORT_FILTERS = {
     "Appointments": apply_appointments_filters,
     "Attendance": apply_attendance_filters,
     "Cost of Goods": apply_cost_of_goods_filters,
     "Sales-Accrual": apply_sales_accrual_filters,
     "Sales-Cash": apply_sales_cash_filters,
+    "Business KPI": apply_business_kpi_filters,
 }
 
 
@@ -436,8 +460,14 @@ def download_report(context, page, report_name, start_date, end_date):
     time.sleep(5)
     print(f"Opening report: {report_name}")
 
-    with context.expect_page(timeout=120000) as new_page_info:
-        page.locator('#gridReports span.report-name').get_by_text(report_name, exact=True).click(timeout=60000)
+    if report_name == "Business KPI":
+        page.evaluate('loadBookmarksViewAllGrid("Bookmarked")')
+        time.sleep(5)
+        with context.expect_page(timeout=120000) as new_page_info:
+            page.evaluate("ReportsGrid_Row_Click(event,'business_kpi')")
+    else:
+        with context.expect_page(timeout=120000) as new_page_info:
+            page.locator('#gridReports span.report-name').get_by_text(report_name, exact=True).click(timeout=60000)
 
     time.sleep(5)
     report_page = new_page_info.value
@@ -549,8 +579,8 @@ with sync_playwright() as p:
         wait_for_dashboard(page)
         save_cookies(context)
 
-        reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash"]
-        # reports = ["Sales-Accrual"]
+        # reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash", "Business KPI"]
+        reports = ["Sales-Cash"]
         failed_reports = []
         succeeded_reports = []
 
