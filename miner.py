@@ -179,7 +179,7 @@ def cleanup_old_csvs():
 
 def create_browser_and_context(pw):
     launch_args = {
-        "headless": False,
+        "headless": True,
         "args": [
             "--start-maximized",
             "--disable-blink-features=AutomationControlled",
