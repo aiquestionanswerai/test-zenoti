@@ -579,8 +579,8 @@ with sync_playwright() as p:
         wait_for_dashboard(page)
         save_cookies(context)
 
-        # reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash", "Business KPI"]
-        reports = ["Sales-Cash"]
+        reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash", "Business KPI"]
+        # reports = ["Sales-Cash"]
         failed_reports = []
         succeeded_reports = []
 
