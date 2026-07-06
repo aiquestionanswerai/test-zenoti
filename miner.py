@@ -92,23 +92,6 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
 
     filename = os.path.basename(filepath)
 
-    # Move ALL existing files in folder to Done before uploading
-    results = service.files().list(
-        q=f"'{folder_id}' in parents and trashed=false",
-        fields="files(id, name)",
-    ).execute()
-
-    existing = results.get("files", [])
-    for old_file in existing:
-        print(f"Moving previous file to Done folder: {old_file['name']}")
-        service.files().update(
-            fileId=old_file["id"],
-            addParents=DONE_FOLDER_ID,
-            removeParents=folder_id,
-            fields="id",
-        ).execute()
-        time.sleep(2)
-
     print(f"Uploading new file: {filename}")
     file_metadata = {"name": filename, "parents": [folder_id]}
     media = MediaFileUpload(filepath, mimetype="text/csv", resumable=True)
@@ -125,6 +108,28 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
         raise Exception(f"Upload failed: {filename}")
 
     return uploaded
+
+
+def move_existing_reports_to_done():
+    service = get_drive_service()
+    if not service:
+        return
+
+    for folder_name, folder_id in REPORT_FOLDERS.items():
+        results = service.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="files(id, name)",
+        ).execute()
+        existing = results.get("files", [])
+        for old_file in existing:
+            print(f"Moving {folder_name}/{old_file['name']} to Done folder")
+            service.files().update(
+                fileId=old_file["id"],
+                addParents=DONE_FOLDER_ID,
+                removeParents=folder_id,
+                fields="id",
+            ).execute()
+            time.sleep(2)
 
 
 def validate_csv(filepath):
@@ -578,6 +583,8 @@ with sync_playwright() as p:
 
         wait_for_dashboard(page)
         save_cookies(context)
+
+        move_existing_reports_to_done()
 
         reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash", "Business KPI"]
         # reports = ["Sales-Cash"]
