@@ -61,6 +61,8 @@ REPORT_FOLDERS = {
     "Appointments": "12jqbWWMgpgioR_23KJKLXSvDignwrcP2",
     "Sales-Accrual": "1TBdw_u-ADwb3m6GH-HY4WOVYblIPBxd-",
     "Business KPI": "1GjkgXcKrGFqa8l9iM-rW8u2MeRVCaB_M",
+    "Memberships": "172HJzXYy_9_qtlgTSlZUgUJmZmT-7qwH",
+    "Inventory Aging": "174ZiUaKjIjEKJNKe75mZXKAwya0F4GNK",
 }
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
@@ -449,6 +451,76 @@ def apply_business_kpi_filters(report_page):
     print("  Business KPI filters applied.")
 
 
+def apply_memberships_filters(report_page):
+    print("  Applying Memberships filters...")
+    report_page.evaluate("""
+        (function() {
+            // All multi-selects → selectAll (Sale Centers, Membership Type, Membership Stats)
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+
+            // Liability Type → By Sale (value "1")
+            $('select:not([multiple])').each(function() {
+                var opts = Array.from(this.options);
+                if (opts.some(function(o) { return o.text.indexOf('By Sale') !== -1 && o.text.indexOf('By Value') === -1; })) {
+                    $(this).multiselect('select', '1');
+                }
+            });
+
+            // Date Type → Sale Date (value "2")
+            $('select:not([multiple])').each(function() {
+                var opts = Array.from(this.options);
+                if (opts.some(function(o) { return o.text.indexOf('Sale Date') !== -1; }) &&
+                    opts.some(function(o) { return o.text.indexOf('Balance As On Date') !== -1; })) {
+                    $(this).multiselect('select', '2');
+                }
+            });
+
+            // Status Type → Membership
+            var $statusType = $('#elm_status_type');
+            if ($statusType.length) {
+                $statusType.multiselect('select', 'Membership');
+            }
+        })();
+    """)
+    time.sleep(2)
+    print("  Memberships filters applied.")
+
+
+def apply_inventory_aging_filters(report_page):
+    print("  Applying Inventory Aging filters...")
+    report_page.evaluate("""
+        (function() {
+            // All multi-selects → selectAll (Centers, Category, Sub Category, Vendor, Brand, Business Unit)
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+
+            // Single selects (radios)
+            $('select:not([multiple])').each(function() {
+                var opts = Array.from(this.options);
+                var texts = opts.map(function(o) { return o.text.trim(); });
+
+                // Product Type → All (value "3")
+                if (texts.indexOf('Retail') !== -1 && texts.indexOf('Consumable') !== -1) {
+                    $(this).multiselect('select', '3');
+                }
+                // On-Hand Qty → All (value "0")
+                else if (texts.indexOf('Greater than 0') !== -1 && texts.indexOf('Less than 0') !== -1) {
+                    $(this).multiselect('select', '0');
+                }
+                // Stock Costing Method → Perpetual Average Cost (value "1")
+                else if (texts.some(function(t) { return t.indexOf('Perpetual') !== -1; })) {
+                    $(this).multiselect('select', '1');
+                }
+            });
+        })();
+    """)
+    time.sleep(2)
+    print("  Inventory Aging filters applied.")
+
+
 REPORT_FILTERS = {
     "Appointments": apply_appointments_filters,
     "Attendance": apply_attendance_filters,
@@ -456,6 +528,8 @@ REPORT_FILTERS = {
     "Sales-Accrual": apply_sales_accrual_filters,
     "Sales-Cash": apply_sales_cash_filters,
     "Business KPI": apply_business_kpi_filters,
+    "Memberships": apply_memberships_filters,
+    "Inventory Aging": apply_inventory_aging_filters,
 }
 
 
@@ -470,6 +544,16 @@ def download_report(context, page, report_name, start_date, end_date):
         time.sleep(5)
         with context.expect_page(timeout=120000) as new_page_info:
             page.evaluate("ReportsGrid_Row_Click(event,'business_kpi')")
+    elif report_name == "Memberships":
+        page.evaluate('loadBookmarksViewAllGrid("Bookmarked")')
+        time.sleep(5)
+        with context.expect_page(timeout=120000) as new_page_info:
+            page.evaluate("ReportsGrid_Row_Click(event,'memberships')")
+    elif report_name == "Inventory Aging":
+        page.evaluate('loadBookmarksViewAllGrid("Bookmarked")')
+        time.sleep(5)
+        with context.expect_page(timeout=120000) as new_page_info:
+            page.evaluate("ReportsGrid_Row_Click(event,'inventory_aging')")
     else:
         with context.expect_page(timeout=120000) as new_page_info:
             page.locator('#gridReports span.report-name').get_by_text(report_name, exact=True).click(timeout=60000)
@@ -514,7 +598,7 @@ def download_report(context, page, report_name, start_date, end_date):
     report_page.evaluate("document.querySelector('#btnRefresh').click()")
     time.sleep(5)
     report_page.wait_for_load_state("networkidle", timeout=300000)
-    time.sleep(10)
+    time.sleep(5)
 
     print("Exporting report to CSV...")
     report_page.locator('#dropdownMenuLink').click()
@@ -523,13 +607,13 @@ def download_report(context, page, report_name, start_date, end_date):
     with report_page.expect_download(timeout=300000) as download_info:
         report_page.evaluate("document.querySelector('#export_csv').click()")
 
-    time.sleep(15)
+    time.sleep(10)
     download = download_info.value
     safe_name = report_name.replace(" ", "_").lower()
     script_dir = os.path.dirname(__file__) or "."
     filename = os.path.join(script_dir, f"{safe_name}_{start_date}_to_{end_date}.csv")
     download.save_as(filename)
-    time.sleep(10)
+    time.sleep(5)
 
     print(f"Validating downloaded file: {filename}")
     validate_csv(filename)
@@ -586,8 +670,8 @@ with sync_playwright() as p:
 
         move_existing_reports_to_done()
 
-        reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Accrual", "Sales-Cash", "Business KPI"]
-        # reports = ["Sales-Cash"]
+        # reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Cash", "Business KPI", "Memberships", "Inventory Aging"]
+        reports = ["Memberships"]
         failed_reports = []
         succeeded_reports = []
 
