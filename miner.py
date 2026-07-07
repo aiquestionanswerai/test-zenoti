@@ -670,8 +670,8 @@ with sync_playwright() as p:
 
         move_existing_reports_to_done()
 
-        # reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Cash", "Business KPI", "Memberships", "Inventory Aging"]
-        reports = ["Memberships"]
+        reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Cash", "Business KPI", "Memberships", "Inventory Aging"]
+        # reports = ["Memberships"]
         failed_reports = []
         succeeded_reports = []
 
