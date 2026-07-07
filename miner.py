@@ -609,9 +609,12 @@ def download_report(context, page, report_name, start_date, end_date):
 
     time.sleep(10)
     download = download_info.value
-    safe_name = report_name.replace(" ", "_").lower()
     script_dir = os.path.dirname(__file__) or "."
-    filename = os.path.join(script_dir, f"{safe_name}_{start_date}_to_{end_date}.csv")
+    if report_name == "Business KPI":
+        filename = os.path.join(script_dir, f"Business_Kpi_{end_date}.csv")
+    else:
+        safe_name = report_name.replace(" ", "_").lower()
+        filename = os.path.join(script_dir, f"{safe_name}_{start_date}_to_{end_date}.csv")
     download.save_as(filename)
     time.sleep(5)
 
@@ -671,13 +674,19 @@ with sync_playwright() as p:
         move_existing_reports_to_done()
 
         reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Cash", "Business KPI", "Memberships", "Inventory Aging"]
-        # reports = ["Memberships"]
+        # reports = ["Business KPI"]
         failed_reports = []
         succeeded_reports = []
 
         for report in reports:
             try:
-                filename = download_report(context, page, report, START_DATE, END_DATE)
+                if report == "Business KPI":
+                    report_start = END_DATE
+                    report_end = END_DATE
+                else:
+                    report_start = START_DATE
+                    report_end = END_DATE
+                filename = download_report(context, page, report, report_start, report_end)
                 folder_id = REPORT_FOLDERS.get(report, DRIVE_FOLDER_ID)
                 upload_to_drive(filename, folder_id)
                 os.remove(filename)
@@ -715,7 +724,13 @@ with sync_playwright() as p:
             for report, prev_error in (failed_reports if relogin_ok else []):
                 try:
                     print(f"Retrying: {report}")
-                    filename = download_report(context, page, report, START_DATE, END_DATE)
+                    if report == "Business KPI":
+                        report_start = END_DATE
+                        report_end = END_DATE
+                    else:
+                        report_start = START_DATE
+                        report_end = END_DATE
+                    filename = download_report(context, page, report, report_start, report_end)
                     folder_id = REPORT_FOLDERS.get(report, DRIVE_FOLDER_ID)
                     upload_to_drive(filename, folder_id)
                     os.remove(filename)
