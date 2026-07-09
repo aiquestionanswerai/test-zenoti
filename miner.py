@@ -95,18 +95,20 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
 
     filename = os.path.basename(filepath)
 
-    # Guardrail (runs on EVERY upload, so a later crash can't skip it): if a
-    # same-name file already sits in this folder — e.g. a prior container
-    # restart re-ran the script — move it to Done BEFORE uploading the new one.
-    # Move, not delete: the drive.file scope can't delete files it didn't create.
+    # Guardrail (runs on EVERY upload, so a later crash can't skip it): move any
+    # file already in this folder to Done BEFORE uploading the new one. Covers
+    # both an older date-stamped file (normal daily rollover) and a same-name
+    # leftover from a prior restart. Move, not delete: the drive.file scope can't
+    # delete files it didn't create. Done per-report at upload time so a mid-run
+    # crash never leaves a folder empty — unprocessed reports keep their file.
     if folder_id != DONE_FOLDER_ID:
-        print(f"Checking for existing {filename} in folder...")
+        print(f"Checking {os.path.basename(os.path.dirname(filepath)) or 'folder'} for existing files...")
         prior = service.files().list(
-            q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+            q=f"'{folder_id}' in parents and trashed=false",
             fields="files(id, name)",
         ).execute().get("files", [])
         for old in prior:
-            print(f"Same filename already in folder: moving {filename} to Done first")
+            print(f"Moving existing {old['name']} to Done first")
             try:
                 service.files().update(
                     fileId=old["id"],
@@ -116,7 +118,7 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
                 ).execute()
                 time.sleep(1)
             except Exception as move_err:
-                print(f"  Could not move existing {filename}: {move_err}")
+                print(f"  Could not move existing {old['name']}: {move_err}")
 
     print(f"Uploading new file: {filename}")
     file_metadata = {"name": filename, "parents": [folder_id]}
@@ -793,7 +795,10 @@ with sync_playwright() as p:
         wait_for_dashboard(page)
         save_cookies(context)
 
-        move_existing_reports_to_done()
+        # NOTE: no upfront mass-move to Done. Each report moves its own previous
+        # file to Done at upload time (pre-move guard in upload_to_drive), so a
+        # crash mid-run never leaves folders empty — unprocessed reports keep
+        # their prior file until their replacement is actually uploaded.
 
         reports = ["Stock Ledger", "Appointments", "Sales-Cash", "Cost of Goods", "Attendance", "Business KPI", "Memberships"]
         # reports = ["Stock Ledger", "Appointments"]
