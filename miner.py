@@ -95,6 +95,29 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
 
     filename = os.path.basename(filepath)
 
+    # Guardrail (runs on EVERY upload, so a later crash can't skip it): if a
+    # same-name file already sits in this folder — e.g. a prior container
+    # restart re-ran the script — move it to Done BEFORE uploading the new one.
+    # Move, not delete: the drive.file scope can't delete files it didn't create.
+    if folder_id != DONE_FOLDER_ID:
+        print(f"Checking for existing {filename} in folder...")
+        prior = service.files().list(
+            q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id, name)",
+        ).execute().get("files", [])
+        for old in prior:
+            print(f"Same filename already in folder: moving {filename} to Done first")
+            try:
+                service.files().update(
+                    fileId=old["id"],
+                    addParents=DONE_FOLDER_ID,
+                    removeParents=folder_id,
+                    fields="id",
+                ).execute()
+                time.sleep(1)
+            except Exception as move_err:
+                print(f"  Could not move existing {filename}: {move_err}")
+
     print(f"Uploading new file: {filename}")
     file_metadata = {"name": filename, "parents": [folder_id]}
     media = MediaFileUpload(filepath, mimetype="text/csv", resumable=True)
@@ -109,6 +132,32 @@ def upload_to_drive(filepath, folder_id=DRIVE_FOLDER_ID):
 
     if not uploaded or not uploaded.get('id'):
         raise Exception(f"Upload failed: {filename}")
+
+    # Post-upload sweep: the Google API client silently retries files().create()
+    # on a lost/timed-out response, which can create a SECOND server-side copy
+    # even though this call returned once with no error. Keep the file we just
+    # got back; move any other same-name copy to Done (can't delete under the
+    # drive.file scope). This is the guard that catches single-run duplicates.
+    if folder_id != DONE_FOLDER_ID:
+        kept_id = uploaded.get("id")
+        copies = service.files().list(
+            q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id, name)",
+        ).execute().get("files", [])
+        for c in copies:
+            if c["id"] == kept_id:
+                continue
+            print(f"Duplicate copy detected: moving extra {filename} to Done")
+            try:
+                service.files().update(
+                    fileId=c["id"],
+                    addParents=DONE_FOLDER_ID,
+                    removeParents=folder_id,
+                    fields="id",
+                ).execute()
+                time.sleep(1)
+            except Exception as sweep_err:
+                print(f"  Could not move duplicate {filename}: {sweep_err}")
 
     return uploaded
 
