@@ -135,6 +135,44 @@ def move_existing_reports_to_done():
             time.sleep(2)
 
 
+def dedupe_report_folders():
+    """Guardrail: if a report folder holds more than one file with the same
+    name (e.g. a container restart re-ran the script and re-uploaded), keep one
+    and move the extras to Done. Move — not delete — because the drive.file
+    scope cannot delete files it did not create."""
+    service = get_drive_service()
+    if not service:
+        return
+
+    for folder_name, folder_id in REPORT_FOLDERS.items():
+        results = service.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="files(id, name)",
+        ).execute()
+        files = results.get("files", [])
+
+        by_name = {}
+        for f in files:
+            by_name.setdefault(f["name"], []).append(f)
+
+        for name, dupes in by_name.items():
+            if len(dupes) < 2:
+                continue
+            # keep the first, move the rest to Done
+            for dup in dupes[1:]:
+                print(f"Duplicate in {folder_name}: moving extra {name} to Done folder")
+                try:
+                    service.files().update(
+                        fileId=dup["id"],
+                        addParents=DONE_FOLDER_ID,
+                        removeParents=folder_id,
+                        fields="id",
+                    ).execute()
+                    time.sleep(2)
+                except Exception as e:
+                    print(f"  Could not move duplicate {name}: {e}")
+
+
 def validate_csv(filepath):
     filename = os.path.basename(filepath)
 
@@ -790,6 +828,9 @@ with sync_playwright() as p:
         print(f"Succeeded: {succeeded_reports}")
         if failed_reports:
             print(f"Failed: {[r for r, _ in failed_reports]}")
+
+        print("Checking report folders for duplicate filenames...")
+        dedupe_report_folders()
 
         print("Logging out...")
         page.goto("https://evolvemedspa.zenoti.com/Admin/Reports/ReportsDashboard.aspx")
