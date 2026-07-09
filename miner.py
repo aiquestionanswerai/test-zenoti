@@ -63,6 +63,7 @@ REPORT_FOLDERS = {
     "Business KPI": "1GjkgXcKrGFqa8l9iM-rW8u2MeRVCaB_M",
     "Memberships": "172HJzXYy_9_qtlgTSlZUgUJmZmT-7qwH",
     "Inventory Aging": "174ZiUaKjIjEKJNKe75mZXKAwya0F4GNK",
+    "Stock Ledger": "1JwZGmMBu-3ZHb67edqOZ8vsj5u9eMRd9",
 }
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
@@ -521,6 +522,32 @@ def apply_inventory_aging_filters(report_page):
     print("  Inventory Aging filters applied.")
 
 
+def apply_stock_ledger_filters(report_page):
+    print("  Applying Stock Ledger filters...")
+    report_page.evaluate("""
+        (function() {
+            // Zenoti dropdown: Centers → All
+            var cb = document.getElementById('elm_centers-zenoti-dropdown-options-all');
+            if (cb && !cb.checked) cb.click();
+
+            // All multi-selects → selectAll (Category, Sub Category, Product Type,
+            // Vendor, Brand, Transaction Type, Business Unit)
+            $('select[multiple]').each(function() {
+                $(this).multiselect('selectAll', false);
+            });
+            // Stock Costing Method (single select) → Perpetual Average Cost
+            $('select:not([multiple])').each(function() {
+                var opts = Array.from(this.options);
+                if (opts.some(function(o) { return o.text.indexOf('Perpetual') !== -1; })) {
+                    $(this).multiselect('select', '1');
+                }
+            });
+        })();
+    """)
+    time.sleep(2)
+    print("  Stock Ledger filters applied.")
+
+
 REPORT_FILTERS = {
     "Appointments": apply_appointments_filters,
     "Attendance": apply_attendance_filters,
@@ -530,6 +557,7 @@ REPORT_FILTERS = {
     "Business KPI": apply_business_kpi_filters,
     "Memberships": apply_memberships_filters,
     "Inventory Aging": apply_inventory_aging_filters,
+    "Stock Ledger": apply_stock_ledger_filters,
 }
 
 
@@ -554,6 +582,11 @@ def download_report(context, page, report_name, start_date, end_date):
         time.sleep(5)
         with context.expect_page(timeout=120000) as new_page_info:
             page.evaluate("ReportsGrid_Row_Click(event,'inventory_aging')")
+    elif report_name == "Stock Ledger":
+        page.evaluate('loadBookmarksViewAllGrid("Bookmarked")')
+        time.sleep(5)
+        with context.expect_page(timeout=120000) as new_page_info:
+            page.evaluate("ReportsGrid_Row_Click(event,'stock_ledger')")
     else:
         with context.expect_page(timeout=120000) as new_page_info:
             page.locator('#gridReports span.report-name').get_by_text(report_name, exact=True).click(timeout=60000)
@@ -603,8 +636,10 @@ def download_report(context, page, report_name, start_date, end_date):
     print("Exporting report to CSV...")
     report_page.locator('#dropdownMenuLink').click()
     time.sleep(2)
+    report_page.wait_for_selector('#export_csv', state='attached', timeout=30000)
 
-    with report_page.expect_download(timeout=300000) as download_info:
+    download_timeout = 900000 if report_name == "Stock Ledger" else 300000
+    with report_page.expect_download(timeout=download_timeout) as download_info:
         report_page.evaluate("document.querySelector('#export_csv').click()")
 
     time.sleep(10)
@@ -673,8 +708,8 @@ with sync_playwright() as p:
 
         move_existing_reports_to_done()
 
-        reports = ["Appointments", "Cost of Goods", "Attendance", "Sales-Cash", "Business KPI", "Memberships"]
-        # reports = ["Business KPI"]
+        reports = ["Stock Ledger", "Appointments", "Sales-Cash", "Cost of Goods", "Attendance", "Business KPI", "Memberships"]
+        # reports = ["Stock Ledger", "Appointments"]
         failed_reports = []
         succeeded_reports = []
 
